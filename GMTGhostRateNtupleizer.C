@@ -42,6 +42,8 @@ class GMTGhostRateNtupleizer : public L1Ntuple
   //your private methods can be declared here
   TNtuple *ntuple;
   void toggleBranches();
+  double dphi(int iRecoMu, int iL1Mu, int iL1Sys); // calculate delta phi between iRecoMu muon and iL1Mu trigcand of type iL1Sys
+  double deta(int iRecoMu, int iL1Mu, int iL1Sys); // calculate delta eta between iRecoMu muon and iL1Mu trigcand of type iL1Sys
   void fillNtuple(int recoMu, int gmtMu1, int gmtMu2, std::pair<bool, bool> muMatch, std::vector<std::string> contDict, Float_t ntupleValues[]);
   double bestL1match(int iRecoMu, int &iL1Muint, int iL1Sys, float ptcut, int exclMu); // finds best match between iRecoMu muon and trig cands of type iL1Sys
   std::pair<bool, bool> matchDiMuons(int iRecoMu1, int iRecoMu2, int &L1Mu1, int &L1Mu2, int iL1Sys, float ptcut, float dRmax); // Find best match for two reco muons
@@ -73,8 +75,8 @@ void GMTGhostRateNtupleizer::run(Long64_t nevents)
   contDict.push_back("SubsysID1_GMT");
   contDict.push_back("SubsysID2_GMT");
   for(auto name:varList) {
-    ntupleContStream << ":" << name << "_reco:" << name << "1_GMT";
-    contDict.push_back(name + "_reco");
+    ntupleContStream << ":" << name << "1_reco:" << name << "1_GMT";
+    contDict.push_back(name + "1_reco");
     contDict.push_back(name + "1_GMT");
     ntupleContStream << ":" << name << "2_GMT";
     contDict.push_back(name + "2_GMT");
@@ -117,30 +119,31 @@ void GMTGhostRateNtupleizer::run(Long64_t nevents)
     //user code here
     ++eventsRun;
 
-    if(recoMuon_->nMuons != 1) {
+    if(recoMuon_->nMuons < 1) {
       ++skips;
       continue; // Only interested in singlemu events
     }
 
-    int recoMu = 0;
-    if(!glmucuts(recoMu)) {
-      ++fails;
-      continue;
+    for(int recoMu = 0; recoMu < recoMuon_->nMuons; ++recoMu) {
+      if(!glmucuts(recoMu)) {
+        ++fails;
+        continue;
+      }
+      ++filledTuples;
+
+      Float_t ntupleValues[contDict.size()];
+
+      int gmtMu1, gmtMu2;
+      std::pair<bool, bool> diMuMatch = matchDiMuons(recoMu, recoMu, gmtMu1, gmtMu2, GMT, 0, 0.1);
+
+      fillNtuple(recoMu, gmtMu1, gmtMu2, diMuMatch, contDict, ntupleValues);
+
+      ntuple->Fill(ntupleValues);
     }
-    ++filledTuples;
-
-    Float_t ntupleValues[contDict.size()];
-
-    int gmtMu1, gmtMu2;
-    std::pair<bool, bool> diMuMatch = matchDiMuons(recoMu, recoMu, gmtMu1, gmtMu2, GMT, 0, 0.3);
-
-    fillNtuple(recoMu, gmtMu1, gmtMu2, diMuMatch, contDict, ntupleValues);
-
-    ntuple->Fill(ntupleValues);
   }
   out->Write();
 
-  std::cout << "Number of events run over: " << eventsRun << " filled rows in ntuple: " << filledTuples << std::endl;
+  std::cout << "Number of events run over: " << eventsRun << "; filled rows in ntuple: " << filledTuples << std::endl;
   std::cout << "Number of skipped events due to less than one reco muon: " << skips << std::endl;
   std::cout << "Number of skipped muons due to glmuon cuts: " << fails << std::endl;
 }
@@ -151,14 +154,14 @@ void GMTGhostRateNtupleizer::fillNtuple(int recoMu, int gmtMu1, int gmtMu2, std:
     if (contDict[varIt] == "N_reco") {
       ntupleValues[varIt] = recoMuon_->nMuons;
     }
-    if (contDict[varIt] == "pT_reco") {
-      ntupleValues[varIt] = recoMuon_->pt[recoMu1];
+    if (contDict[varIt] == "pT1_reco") {
+      ntupleValues[varIt] = recoMuon_->pt[recoMu];
     }
-    if (contDict[varIt] == "Eta_reco") {
-      ntupleValues[varIt] = recoMuon_->eta[recoMu1];
+    if (contDict[varIt] == "Eta1_reco") {
+      ntupleValues[varIt] = recoMuon_->eta[recoMu];
     }
-    if (contDict[varIt] == "Phi_reco") {
-      ntupleValues[varIt] = recoMuon_->phi[recoMu1];
+    if (contDict[varIt] == "Phi1_reco") {
+      ntupleValues[varIt] = recoMuon_->phi[recoMu];
     }
 
     if (contDict[varIt] == "N_GMT") {
@@ -278,6 +281,59 @@ muSysEnum GMTGhostRateNtupleizer::whichSubsystem(int mu)
   }
 
   return muSys;
+}
+double GMTGhostRateNtupleizer::dphi(int iRecoMu, int iL1Mu, int iL1Sys)
+{
+  if (recoMuon_->type[iRecoMu] != 0) {
+    return -9999;
+  } // not a global
+  Double_t trigphi = -99999;
+  if (iL1Sys==DT) trigphi=gmt_->Phidt[iL1Mu];
+  if (iL1Sys==RPCb) trigphi=gmt_->Phirpcb[iL1Mu];
+  if (iL1Sys==CSC ) trigphi=gmt_->Phicsc[iL1Mu];
+  if (iL1Sys==RPCf) trigphi=gmt_->Phirpcf[iL1Mu];
+  if (iL1Sys==GMT)trigphi=gmt_->Phi[iL1Mu];
+  Double_t recophi = -99999;
+  Double_t recophi2 = -99999;
+  if (iL1Sys==DT || iL1Sys==RPCb) {
+    recophi=recoMuon_->sa_phi_mb2[iRecoMu]-(pig/144.);
+  }
+  if ((iL1Sys==CSC|| iL1Sys==RPCf) && recoMuon_->eta[iRecoMu]>=0) recophi=recoMuon_->sa_phi_me2_p[iRecoMu]-(pig/144.);
+  if ((iL1Sys==CSC|| iL1Sys==RPCf) && recoMuon_->eta[iRecoMu] <0) recophi=recoMuon_->sa_phi_me2_n[iRecoMu]-(pig/144.);
+  if (iL1Sys==GMT) {
+    recophi=recoMuon_->sa_phi_mb2[iRecoMu]-(pig/144.);
+    if (recoMuon_->eta[iRecoMu]>=0) recophi2=recoMuon_->sa_phi_me2_p[iRecoMu]-(pig/144.);
+    else recophi2=recoMuon_->sa_phi_me2_n[iRecoMu]-(pig/144.);
+  }
+  Double_t newphisep = recophi - trigphi;
+  if (newphisep<-pig) newphisep = newphisep + 2*pig;
+  if (newphisep> pig) newphisep = newphisep - 2*pig;
+  Double_t newphisep2 = recophi2 - trigphi;
+  if (newphisep2<-pig) newphisep2 = newphisep2 + 2*pig;
+  if (newphisep2> pig) newphisep2 = newphisep2 - 2*pig;
+  if (iL1Sys==GMT) {
+    if (fabs(newphisep)>fabs(newphisep2)) newphisep = newphisep2;
+  }
+
+  if (iL1Sys==RECOPASS) newphisep = 0;
+  if (newphisep>1000) return -999;
+  return newphisep;
+}
+double GMTGhostRateNtupleizer::deta(int iRecoMu, int iL1Mu, int iL1Sys)
+{
+  if (recoMuon_->type[iRecoMu] != 0) {
+    return -9999; // not a global
+  }
+  Double_t trigeta = -99999;
+  if (iL1Sys==DT) trigeta=gmt_->Etadt[iL1Mu];
+  if (iL1Sys==RPCb) trigeta=gmt_->Etarpcb[iL1Mu];
+  if (iL1Sys==CSC ) trigeta=gmt_->Etacsc[iL1Mu];
+  if (iL1Sys==RPCf) trigeta=gmt_->Etarpcf[iL1Mu];
+  if (iL1Sys==GMT)trigeta=gmt_->Eta[iL1Mu];
+  Double_t newetasep = recoMuon_->eta[iRecoMu]-trigeta;
+  if (iL1Sys==RECOPASS) newetasep = 0;
+  if (newetasep>1000) return -999;
+  return newetasep;
 }
 double GMTGhostRateNtupleizer::bestL1match(int iRecoMu, int &iL1Mu, int iL1Sys, float ptcut, int exclMu)
 {
